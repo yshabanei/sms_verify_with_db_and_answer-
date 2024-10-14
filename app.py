@@ -1,7 +1,6 @@
 from flask import Flask, jsonify, request
-import 
 from decouple import config
-
+import  requests
 app = Flask(__name__)
 
 API_KEY = config("API_KEY")
