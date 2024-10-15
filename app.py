@@ -57,11 +57,7 @@ def import_database_from_excel(filepath):
         start_serial = row.get("Start Serial")
         end_serial = row.get("End Serial")
         date = row.get("Date")
-        
-        # Process or print the data
         logging.info(f"Row {index}: Ref: {ref_number}, Desc: {description}, Start: {start_serial}, End: {end_serial}, Date: {date}")
-
-    # Reading the second sheet (failed serial numbers) with the specified engine
     df_failed = pd.read_excel(filepath, sheet_name=1, engine='openpyxl')
     logging.info("Importing failed serial numbers...")
     for index, row in df_failed.iterrows():
