@@ -48,22 +48,26 @@ def import_database_from_excel(filepath):
     """Imports data from an Excel file. The first sheet contains lookup data,
     and the second sheet contains a list of failed serial numbers."""
     
-    # Reading the first sheet (lookup data) with the specified engine
-    df = pd.read_excel(filepath, sheet_name=0, engine='openpyxl')
-    logging.info("Importing lookup data...")
-    for index, row in df.iterrows():
-        ref_number = row.get("Reference Number")
-        description = row.get("Description")
-        start_serial = row.get("Start Serial")
-        end_serial = row.get("End Serial")
-        date = row.get("Date")
-        logging.info(f"Row {index}: Ref: {ref_number}, Desc: {description}, Start: {start_serial}, End: {end_serial}, Date: {date}")
-    df_failed = pd.read_excel(filepath, sheet_name=1, engine='openpyxl')
-    logging.info("Importing failed serial numbers...")
-    for index, row in df_failed.iterrows():
-        failed_serial = row.get("Failed Serial")
-        logging.info(f"Failed serial {index}: {failed_serial}")
+    try:
+        # Reading the first sheet (lookup data) with the specified engine
+        df = pd.read_excel(filepath, sheet_name=0, engine='openpyxl')
+        logging.info("Importing lookup data...")
+        for index, row in df.iterrows():
+            ref_number = row.get("Reference Number")
+            description = row.get("Description")
+            start_serial = row.get("Start Serial")
+            end_serial = row.get("End Serial")
+            date = row.get("Date")
+            logging.info(f"Row {index}: Ref: {ref_number}, Desc: {description}, Start: {start_serial}, End: {end_serial}, Date: {date}")
+
+        df_failed = pd.read_excel(filepath, sheet_name=1, engine='openpyxl')
+        logging.info("Importing failed serial numbers...")
+        for index, row in df_failed.iterrows():
+            failed_serial = row.get("Failed Serial")
+            logging.info(f"Failed serial {index}: {failed_serial}")
+    except Exception as e:
+        logging.error(f"Error importing database from Excel: {e}")
 
 if __name__ == "__main__":
-    import_database_from_excel('/tmp/main.xlsx')
+    import_database_from_excel('tmp/main.xlsx')
     app.run("0.0.0.0", 5000, debug=True)
