@@ -1,34 +1,36 @@
 from flask import Flask, jsonify, request
-from decouple import config
 import requests
+from decouple import config
+import pandas as pd
 
 app = Flask(__name__)
 
 API_KEY = config("API_KEY")
 
-
-@app.route("/v1/process", methods=["POST"])
+@app.route('/v1/process', methods=['POST'])
 def process():
     """This is a callback from KaveNegar. It will get sender and message, check if valid, and answer back."""
     data = request.form
     sender = data.get("from")
     message = data.get("message")
-
+    
     if not sender or not message:
         return jsonify({"error": "Missing 'from' or 'message' in request."}), 400
-
+    
     print(f"Received '{message}' from {sender}")
-    send_sms(sender, "Hi" + message)
+    send_sms(sender, f'Hi {message}')
 
     ret = {"message": "processed"}
     return jsonify(ret), 200
 
-
 def send_sms(receptor, message):
     """This function will send an SMS using Kavenegar API."""
-    url = f"https://api.kavenegar.com/v1/{API_KEY}/sms/send.json"
-    data = {"message": message, "receptor": receptor}
-
+    url = f'https://api.kavenegar.com/v1/{API_KEY}/sms/send.json'
+    data = {
+        "message": message,
+        "receptor": receptor
+    }
+    
     try:
         res = requests.post(url, data=data)
         res.raise_for_status()
@@ -38,11 +40,32 @@ def send_sms(receptor, message):
         return False
     return True
 
+def import_database_from_excel(filepath):
+    """Imports data from an Excel file. The first sheet contains lookup data,
+    and the second sheet contains a list of failed serial numbers."""
+    
+    # Reading the first sheet (lookup data) with the specified engine
+    df = pd.read_excel(filepath, sheet_name=0, engine='openpyxl')
+    print("Importing lookup data...")
+    for index, row in df.iterrows():
+        ref_number = row.get("Reference Number")
+        description = row.get("Description")
+        start_serial = row.get("Start Serial")
+        end_serial = row.get("End Serial")
+        date = row.get("Date")
+        
+        # Process or print the data
+        print(f"Row {index}: Ref: {ref_number}, Desc: {description}, Start: {start_serial}, End: {end_serial}, Date: {date}")
 
-def check_serial():
-    # Your serial checking logic will go here
-    pass
-
+    # Reading the second sheet (failed serial numbers) with the specified engine
+    df_failed = pd.read_excel(filepath, sheet_name=1, engine='openpyxl')
+    print("Importing failed serial numbers...")
+    for index, row in df_failed.iterrows():
+        failed_serial = row.get("Failed Serial")
+        
+        # Process or print the failed serial
+        print(f"Failed serial {index}: {failed_serial}")
 
 if __name__ == "__main__":
-    app.run("0.0.0.0", 5000, debug=True)
+    import_database_from_excel('/tmp/main.xlsx')
+    # app.run("0.0.0.0", 5000, debug=True)
