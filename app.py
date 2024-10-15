@@ -2,10 +2,14 @@ from flask import Flask, jsonify, request
 import requests
 from decouple import config
 import pandas as pd
+import logging
 
 app = Flask(__name__)
 
 API_KEY = config("API_KEY")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 @app.route('/v1/process', methods=['POST'])
 def process():
@@ -17,7 +21,7 @@ def process():
     if not sender or not message:
         return jsonify({"error": "Missing 'from' or 'message' in request."}), 400
     
-    print(f"Received '{message}' from {sender}")
+    logging.info(f"Received '{message}' from {sender}")
     send_sms(sender, f'Hi {message}')
 
     ret = {"message": "processed"}
@@ -34,9 +38,9 @@ def send_sms(receptor, message):
     try:
         res = requests.post(url, data=data)
         res.raise_for_status()
-        print(f"Message '{message}' sent to {receptor}. Status code: {res.status_code}")
+        logging.info(f"Message '{message}' sent to {receptor}. Status code: {res.status_code}")
     except requests.RequestException as e:
-        print(f"Failed to send message: {e}")
+        logging.error(f"Failed to send message: {e}")
         return False
     return True
 
@@ -46,7 +50,7 @@ def import_database_from_excel(filepath):
     
     # Reading the first sheet (lookup data) with the specified engine
     df = pd.read_excel(filepath, sheet_name=0, engine='openpyxl')
-    print("Importing lookup data...")
+    logging.info("Importing lookup data...")
     for index, row in df.iterrows():
         ref_number = row.get("Reference Number")
         description = row.get("Description")
@@ -55,17 +59,15 @@ def import_database_from_excel(filepath):
         date = row.get("Date")
         
         # Process or print the data
-        print(f"Row {index}: Ref: {ref_number}, Desc: {description}, Start: {start_serial}, End: {end_serial}, Date: {date}")
+        logging.info(f"Row {index}: Ref: {ref_number}, Desc: {description}, Start: {start_serial}, End: {end_serial}, Date: {date}")
 
     # Reading the second sheet (failed serial numbers) with the specified engine
     df_failed = pd.read_excel(filepath, sheet_name=1, engine='openpyxl')
-    print("Importing failed serial numbers...")
+    logging.info("Importing failed serial numbers...")
     for index, row in df_failed.iterrows():
         failed_serial = row.get("Failed Serial")
-        
-        # Process or print the failed serial
-        print(f"Failed serial {index}: {failed_serial}")
+        logging.info(f"Failed serial {index}: {failed_serial}")
 
 if __name__ == "__main__":
     import_database_from_excel('/tmp/main.xlsx')
-    # app.run("0.0.0.0", 5000, debug=True)
+    app.run("0.0.0.0", 5000, debug=True)
