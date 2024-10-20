@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from flask import Flask, jsonify, request
 import requests
@@ -15,6 +16,12 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+
+@app.route('/v1/ok')
+def health_check():
+    retr = {'message': 'ok'}
+    return jsonify(retr), 200
+    
 
 @app.route("/v1/process", methods=["POST"])
 def process():
@@ -55,6 +62,7 @@ def normalize_string(input_str):
     for i in range(len(from_char)):
         input_str = input_str.replace(from_char[i], to_char[i])
     input_str = input_str.upper()
+    input_str = re.sub(r'\W', '', input_str) #remove any non alphanumeric character
     return input_str
 
 
