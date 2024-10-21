@@ -1,6 +1,7 @@
 import re
 import sqlite3
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response, redirect, url_for, session, abort
+from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
 import requests
 from decouple import config
 import pandas as pd
@@ -8,13 +9,84 @@ import logging
 
 app = Flask(__name__)
 
+# Configuration
 API_KEY = config("API_KEY")
 DATABASE_FILE_PATH = config("DATABASE_FILE_PATH")
+app.config["SECRET_KEY"] = config("SECRET_KEY")
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+# flask-login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = "login"
+
+
+class User(UserMixin):
+    def __init__(self, id):
+        self.id = id
+
+    def __repr__(self):
+        return "%d" % (self.id)
+
+
+# Replace with actual user database or authentication mechanism
+users = {1: User(1)}  # Example user with id=1
+
+
+@app.route("/")
+@login_required
+def home():
+    return Response("Hello World!")
+
+
+# login route
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+        if password == config("PASSWORD") and username == config("USERNAME"):
+            user = users.get(1)  # Simulate a user lookup
+            login_user(user)
+            return redirect(
+                request.args.get("next") or url_for("home")
+            )  # Safe redirect
+        else:
+            return abort(401)
+    else:
+        return Response(
+            """
+        <form action="" method="post">
+            <p><input type="text" name="username" required>
+            <p><input type="password" name="password" required>
+            <p><input type="submit" value="Login">
+        </form>
+        """
+        )
+
+
+# logout route
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return Response("<p>Logged out</p>")
+
+
+# handle login failure
+@app.errorhandler(401)
+def page_not_found(e):
+    return Response("<p>Login failed</p>")
+
+
+# callback to reload user object
+@login_manager.user_loader
+def load_user(userid):
+    return users.get(int(userid))
 
 
 @app.route("/v1/ok")
@@ -62,8 +134,9 @@ def normalize_string(input_str):
     from_char = "۱۲۳۴۵۶۷۸۹۰"
     to_char = "1234567890"
     translator = str.maketrans(from_char, to_char)
-    input_str = input_str.translate(translator)
-    return re.sub(r"\W", "", input_str.upper())  # Remove non-alphanumeric characters
+    return re.sub(
+        r"\W", "", input_str.translate(translator).upper()
+    )  # Normalize and remove non-alphanumeric
 
 
 def insert_serials(cur, serials):
@@ -80,7 +153,7 @@ def insert_serials(cur, serials):
             for _, row in serials.iterrows()
         ]
         cur.executemany(
-            "ytINSERT INTO serials (ref_number, description, start_serial, end_serial, date) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO serials (ref_number, description, start_serial, end_serial, date) VALUES (?, ?, ?, ?, ?)",
             rows,
         )
         logging.info(f"Inserted {len(rows)} serial records successfully.")
@@ -131,8 +204,6 @@ def import_database_from_excel(filepath):
             logging.info("Importing failed serial numbers...")
 
             for index, row in df_failed.iterrows():
-                start_serial = normalize_string(row.get("Start Serial", ""))
-                end_serial = normalize_string(row.get("End Serial", ""))
                 failed_serial = normalize_string(row.get("Failed Serial", ""))
                 logging.info(f"Failed serial {index}: {failed_serial}")
 
@@ -161,7 +232,7 @@ def check_serial(serial_number):
             invalid_result = cur.fetchone()
 
             if invalid_result:
-                return "this serial is among failed ones"  # TODO: return the string provided by the customer
+                return "This serial is among the failed ones."
             elif result:
                 return f"Serial number {serial_number} is valid and belongs to {result[1]}."
             else:
