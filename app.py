@@ -17,29 +17,31 @@ logging.basicConfig(
 )
 
 
-@app.route('/v1/ok')
+@app.route("/v1/ok")
 def health_check():
-    retr = {'message': 'ok'}
+    retr = {"message": "ok"}
     return jsonify(retr), 200
-    
+
 
 @app.route("/v1/process", methods=["POST"])
 def process():
-    """This is a callback from KaveNegar. It will get sender and message, check if valid, and answer back."""
+    """Callback from KaveNegar. It gets sender and message, checks if valid, and replies."""
     data = request.form
     sender = data.get("from")
-    message = normalize_string(data["message"])
+    message = normalize_string(data.get("message", ""))
+
     if not sender or not message:
         return jsonify({"error": "Missing 'from' or 'message' in request."}), 400
 
+    answer = check_serial(message)
     logging.info(f"Received '{message}' from {sender}")
-    send_sms(sender, f"Hi {message}")
+    send_sms(sender, answer)
 
     return jsonify({"message": "processed"}), 200
 
 
 def send_sms(receptor, message):
-    """This function will send an SMS using Kavenegar API."""
+    """Send an SMS using Kavenegar API."""
     url = f"https://api.kavenegar.com/v1/{API_KEY}/sms/send.json"
     data = {"message": message, "receptor": receptor}
 
@@ -56,39 +58,38 @@ def send_sms(receptor, message):
 
 
 def normalize_string(input_str):
+    """Normalize the input string by replacing Persian numbers and removing non-alphanumeric characters."""
     from_char = "۱۲۳۴۵۶۷۸۹۰"
     to_char = "1234567890"
-
-    for i in range(len(from_char)):
-        input_str = input_str.replace(from_char[i], to_char[i])
-    input_str = input_str.upper()
-    input_str = re.sub(r'\W', '', input_str) #remove any non alphanumeric character
-    return input_str
+    translator = str.maketrans(from_char, to_char)
+    input_str = input_str.translate(translator)
+    return re.sub(r"\W", "", input_str.upper())  # Remove non-alphanumeric characters
 
 
 def insert_serials(cur, serials):
-    """Inserts serial records into the database."""
-    for index, row in serials.iterrows():
-        try:
-            cur.execute(
-                "INSERT INTO serials (ref_number, description, start_serial, end_serial, date) VALUES (?, ?, ?, ?, ?)",
-                (
-                    row["Reference Number"],
-                    row["Description"],
-                    row["Start Serial"],
-                    row["End Serial"],
-                    row["Date"],
-                ),
+    """Insert serial records into the database using bulk insert."""
+    try:
+        rows = [
+            (
+                row["Reference Number"],
+                row["Description"],
+                normalize_string(row["Start Serial"]),
+                normalize_string(row["End Serial"]),
+                row["Date"],
             )
-            logging.info(
-                f"Inserted Row {index}: Ref: {row['Reference Number']}, Desc: {row['Description']}, Start: {row['Start Serial']}, End: {row['End Serial']}, Date: {row['Date']}"
-            )
-        except Exception as e:
-            logging.error(f"Failed to insert row {index}: {e}")
+            for _, row in serials.iterrows()
+        ]
+        cur.executemany(
+            "ytINSERT INTO serials (ref_number, description, start_serial, end_serial, date) VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+        logging.info(f"Inserted {len(rows)} serial records successfully.")
+    except Exception as e:
+        logging.error(f"Failed to insert serial records: {e}")
 
 
 def import_database_from_excel(filepath):
-    """Imports data from an Excel file."""
+    """Import data from an Excel file into the SQLite database."""
     try:
         with sqlite3.connect(DATABASE_FILE_PATH) as conn:
             cur = conn.cursor()
@@ -104,6 +105,8 @@ def import_database_from_excel(filepath):
                 );"""
             )
             conn.commit()
+
+            # Import the first sheet (serials)
             df = pd.read_excel(filepath, sheet_name=0, engine="openpyxl")
             logging.info("Importing lookup data...")
 
@@ -122,15 +125,18 @@ def import_database_from_excel(filepath):
 
             insert_serials(cur, df)
             conn.commit()
-            logging.info("Finished importing lookup data.")
+
+            # Import the second sheet (failed serials)
             df_failed = pd.read_excel(filepath, sheet_name=1, engine="openpyxl")
             logging.info("Importing failed serial numbers...")
+
             for index, row in df_failed.iterrows():
-                start_serial = normalize_string(start_serial)
-                end_serial = normalize_string(end_serial)
-                failed_serial = row.get("Failed Serial")
+                start_serial = normalize_string(row.get("Start Serial", ""))
+                end_serial = normalize_string(row.get("End Serial", ""))
+                failed_serial = normalize_string(row.get("Failed Serial", ""))
                 logging.info(f"Failed serial {index}: {failed_serial}")
 
+            logging.info("Finished importing lookup data.")
     except FileNotFoundError:
         logging.error("Excel file not found.")
     except sqlite3.Error as e:
@@ -139,10 +145,33 @@ def import_database_from_excel(filepath):
         logging.error(f"Error importing database from Excel: {e}")
 
 
-def check_serial():
-    pass
+def check_serial(serial_number):
+    """Check if the serial number exists in the database and return an appropriate response."""
+    try:
+        with sqlite3.connect(DATABASE_FILE_PATH) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM serials WHERE start_serial <= ? AND end_serial >= ?",
+                (serial_number, serial_number),
+            )
+            result = cur.fetchone()
+            cur.execute(
+                "SELECT * FROM invalids WHERE invalid_serial = ?", (serial_number,)
+            )
+            invalid_result = cur.fetchone()
+
+            if invalid_result:
+                return "this serial is among failed ones"  # TODO: return the string provided by the customer
+            elif result:
+                return f"Serial number {serial_number} is valid and belongs to {result[1]}."
+            else:
+                return f"Serial number {serial_number} is not valid."
+    except sqlite3.Error as e:
+        logging.error(f"SQLite error: {e}")
+        return "Database error occurred."
 
 
 if __name__ == "__main__":
-    import_database_from_excel("tmp/main.xlsx")
+    import_database_from_excel("./tmp/main.xlsx")
+    print(check_serial("jj104"))
     app.run("0.0.0.0", 5000, debug=True)

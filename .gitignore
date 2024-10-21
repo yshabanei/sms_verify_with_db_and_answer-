@@ -129,3 +129,5 @@ dmypy.json
 *.iml
 .idea/
 *.xlsx
+path to the file which used by sqlite
+
