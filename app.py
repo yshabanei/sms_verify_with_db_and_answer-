@@ -6,13 +6,14 @@ import requests
 from decouple import config
 import pandas as pd
 import logging
+import os
 
 app = Flask(__name__)
 
 # Configuration
 API_KEY = config("API_KEY")
 DATABASE_FILE_PATH = config("DATABASE_FILE_PATH")
-app.config["SECRET_KEY"] = config("SECRET_KEY")
+SECRET_KEY = config("SECRET_KEY")
 
 # Configure logging
 logging.basicConfig(
@@ -24,16 +25,18 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
 
+app.config.update(SECRET_KEY=SECRET_KEY)
+
 
 class User(UserMixin):
     def __init__(self, id):
         self.id = id
 
     def __repr__(self):
-        return "%d" % (self.id)
+        return "%d" % self.id
 
 
-# Replace with actual user database or authentication mechanism
+# Example user database
 users = {1: User(1)}  # Example user with id=1
 
 
@@ -79,7 +82,7 @@ def logout():
 
 # handle login failure
 @app.errorhandler(401)
-def page_not_found(e):
+def page_not_found(error):
     return Response("<p>Login failed</p>")
 
 
@@ -243,6 +246,9 @@ def check_serial(serial_number):
 
 
 if __name__ == "__main__":
+    # Ensure the database file path and secret key are set properly
+    if not API_KEY or not DATABASE_FILE_PATH or not SECRET_KEY:
+        logging.error("Missing required configuration. Check .env file.")
+        exit(1)
     import_database_from_excel("./tmp/main.xlsx")
-    print(check_serial("jj104"))
     app.run("0.0.0.0", 5000, debug=True)
