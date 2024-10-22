@@ -14,7 +14,7 @@ This project is done for Altech (Schneider Electric Iran) as an educational seri
 - ای پی آی های دریافت و ارسال اسمس از درگاه پیامک کاوه نگار
 - پاس فندق
 - مای اسکوئل
-- 
+- </div>
 ## How to run
 1. Install python3, pip3, virtualenv, MySQL in your system.
 2. Clone the project `git clone https://github.com/jadijadi/sms_serial_verification && cd sms_serial_verification`
