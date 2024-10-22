@@ -133,13 +133,20 @@ def send_sms(receptor, message):
 
 
 def normalize_string(input_str):
-    """Normalize the input string by replacing Persian numbers and removing non-alphanumeric characters."""
-    from_char = "۱۲۳۴۵۶۷۸۹۰"
+    """Normalize the input string by replacing Persian and Arabic numbers and removing non-alphanumeric characters."""
+    persian_numerals = "۱۲۳۴۵۶۷۸۹۰"
+    arabic_numerals = "١٢٣٤٥٦٧٨٩٠"
     to_char = "1234567890"
-    translator = str.maketrans(from_char, to_char)
-    return re.sub(
-        r"\W", "", input_str.translate(translator).upper()
-    )  # Normalize and remove non-alphanumeric
+
+    # Replace Persian and Arabic numerals with English numerals
+    for i in range(len(to_char)):
+        input_str = input_str.replace(persian_numerals[i], to_char[i])
+        input_str = input_str.replace(arabic_numerals[i], to_char[i])
+
+    # Convert to uppercase and remove non-alphanumeric characters
+    input_str = input_str.upper()
+    input_str = re.sub(r"\W+", "", input_str)
+    return input_str
 
 
 def insert_serials(cur, serials):
