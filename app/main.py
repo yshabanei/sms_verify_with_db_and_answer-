@@ -1,32 +1,35 @@
 import logging
+import os
+import re
 import sqlite3
 import pandas as pd
 import requests
 from decouple import config
-from flask import Flask, jsonify, request, Response, redirect, url_for, abort
+from flask import Flask, jsonify, request, Response, redirect, url_for, flash, session
 from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
 from werkzeug.utils import secure_filename
 
-app = Flask(__name__)
+# Configure application
 UPLOAD_FOLDER = config("UPLOAD_FOLDER")
-ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS")
-
-# Configuration
+ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS").split(",")
 API_KEY = config("API_KEY")
 DATABASE_FILE_PATH = config("DATABASE_FILE_PATH")
 SECRET_KEY = config("SECRET_KEY")
 
-# Configure logging
+app = Flask(__name__)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config.update(SECRET_KEY=SECRET_KEY)
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-
-# flask-login
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
 
-app.config.update(SECRET_KEY=SECRET_KEY)
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 class User(UserMixin):
@@ -37,60 +40,103 @@ class User(UserMixin):
         return "%d" % self.id
 
 
-# Example user database
-users = {1: User(1)}  # Example user with id=1
-
-
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
 @login_required
 def home():
-    return Response("Hello World!")
+    """Home page for file upload."""
+    if request.method == "POST":
+        if "file" not in request.files:
+            flash("No file part")
+            return redirect(request.url)
+
+        file = request.files["file"]
+
+        if file.filename == "":
+            flash("No selected file")
+            session["message"] = f"No selected file"
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+            file.save(file_path)
+            rows, failures = import_database_from_excel(file_path)
+            session["message"] = (
+                f"imported {rows} rows of  serials and {failures} rows of failure"
+            )
+            os.remove(file_path)
+            return redirect("/")
+    message = session.get("message", "")
+    session["message"] = ""
+
+    return Response(
+        f"""
+    <html>
+        <body>
+            <h1>Upload a file</h1>
+            <h3>{message}</h3>
+            <form method="POST" enctype="multipart/form-data">
+                <input type="file" name="file">
+                <input type="submit" value="Upload">
+            </form>
+            <br>
+            <a href="/logout">Logout</a>
+        </body>
+    </html>
+    """
+    )
 
 
-# login route
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
-        if password == config("PASSWORD") and username == config("USERNAME"):
-            user = users.get(1)  # Simulate a user lookup
+
+        # Retrieve username and password from environment variables
+        expected_username = config("USERNAME")
+        expected_password = config("PASSWORD")
+
+        # Check if the provided credentials match
+        if username == expected_username and password == expected_password:
+            user = User(id=1)  # Adjust user ID as necessary
             login_user(user)
+            flash("Login successful!")
             return redirect(
                 request.args.get("next") or url_for("home")
             )  # Safe redirect
         else:
-            return abort(401)
+            flash("Invalid username or password.")
+            return redirect(url_for("login"))
     else:
         return Response(
             """
         <form action="" method="post">
-            <p><input type="text" name="username" required>
-            <p><input type="password" name="password" required>
-            <p><input type="submit" value="Login">
+            <p><input type="text" name="username" required placeholder="Username"></p>
+            <p><input type="password" name="password" required placeholder="Password"></p>
+            <p><input type="submit" value="Login"></p>
         </form>
         """
         )
 
 
-# logout route
 @app.route("/logout")
 @login_required
 def logout():
+    """Logout the user and redirect to the login page."""
     logout_user()
-    return Response("<p>Logged out</p>")
+    return redirect(url_for("login"))
 
 
-# handle login failure
+# Handle login failure
 @app.errorhandler(401)
 def page_not_found(error):
     return Response("<p>Login failed</p>")
 
 
-# callback to reload user object
 @login_manager.user_loader
 def load_user(userid):
-    return users.get(int(userid))
+    return User(userid)
 
 
 @app.route("/v1/ok")
@@ -133,12 +179,8 @@ def send_sms(receptor, message):
     return True
 
 
-import re
-
-
 def normalize_string(input_str, fixed_size=30):
     """Normalize the input string by replacing Persian and Arabic numbers and removing non-alphanumeric characters."""
-
     persian_numerals = "۱۲۳۴۵۶۷۸۹۰"
     arabic_numerals = "١٢٣٤٥٦٧٨٩٠"
     english_numerals = "1234567890"
@@ -241,35 +283,20 @@ def import_database_from_excel(filepath):
 
 
 def check_serial(serial_number):
-    """Check if the serial number exists in the database and return an appropriate response."""
-    try:
-        with sqlite3.connect(DATABASE_FILE_PATH) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT * FROM serials WHERE start_serial <= ? AND end_serial >= ?",
-                (serial_number, serial_number),
-            )
-            result = cur.fetchone()
-            cur.execute(
-                "SELECT * FROM invalids WHERE invalid_serial = ?", (serial_number,)
-            )
-            invalid_result = cur.fetchone()
+    """Check if the serial number exists in the database and return a response."""
+    with sqlite3.connect(DATABASE_FILE_PATH) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT description FROM serials WHERE start_serial <= ? AND end_serial >= ?",
+            (serial_number, serial_number),
+        )
+        result = cur.fetchone()
 
-            if invalid_result:
-                return "This serial is among the failed ones."
-            elif result:
-                return f"Serial number {serial_number} is valid and belongs to {result[1]}."
-            else:
-                return f"Serial number {serial_number} is not valid."
-    except sqlite3.Error as e:
-        logging.error(f"SQLite error: {e}")
-        return "Database error occurred."
+    if result:
+        return f"Serial number {serial_number} is valid: {result[0]}"
+    else:
+        return f"Serial number {serial_number} is invalid."
 
 
 if __name__ == "__main__":
-    # Ensure the database file path and secret key are set properly
-    if not API_KEY or not DATABASE_FILE_PATH or not SECRET_KEY:
-        logging.error("Missing required configuration. Check .env file.")
-        exit(1)
-    import_database_from_excel("../tmp/main.xlsx")
-    app.run("0.0.0.0", 5000, debug=True)
+    app.run(debug=True)
