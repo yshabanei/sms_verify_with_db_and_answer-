@@ -1,13 +1,15 @@
 import logging
 import sqlite3
-
 import pandas as pd
 import requests
 from decouple import config
 from flask import Flask, jsonify, request, Response, redirect, url_for, abort
 from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+UPLOAD_FOLDER = config("UPLOAD_FOLDER")
+ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS")
 
 # Configuration
 API_KEY = config("API_KEY")
