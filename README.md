@@ -17,7 +17,7 @@ This project is done for Altech (Schneider Electric Iran) as an educational seri
 - </div>
 ## How to run
 1. Install python3, pip3, virtualenv, MySQL in your system.
-2. Clone the project `git clone https://github.com/jadijadi/sms_serial_verification && cd sms_serial_verification`
+2. Clone the project `git clone https://github.com/yazdancode/sms_verify_with_db_and_answer.git && cd sms_serial_verification`
 3. in the app folder, rename the `config.py.sample` to `config.py` and do proper changes.
 4. db configs are in config.py. Create the db and grant all access to the specified user with specified password.
 5. Create a virtualenv named venv using `virtualenv -p python3 venv`
