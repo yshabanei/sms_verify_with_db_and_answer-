@@ -9,7 +9,6 @@ from flask import (
     Flask,
     jsonify,
     request,
-    Response,
     redirect,
     url_for,
     flash,
@@ -23,7 +22,6 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.security import check_password_hash
 
-# Configure application
 UPLOAD_FOLDER = config("UPLOAD_FOLDER")
 ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS").split(",")
 API_KEY = config("API_KEY")
@@ -33,12 +31,11 @@ CALL_BACK_TOKEN = config("CALL_BACK_TOKEN")
 
 app = Flask(__name__)
 limiter = Limiter(get_remote_address, app=app)
-csrf = CSRFProtect(app)
-
+csrf = CSRFProtect()
+csrf.init_app(app)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config.update(SECRET_KEY=SECRET_KEY)
 
-# Set up logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -47,7 +44,6 @@ login_manager.init_app(app)
 login_manager.login_view = "login"
 
 
-# User class for Flask-Login
 class User(UserMixin):
     def __init__(self, id):
         self.id = id
@@ -56,7 +52,6 @@ class User(UserMixin):
         return "%d" % self.id
 
 
-# Helper function to check allowed file types
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -95,15 +90,13 @@ def home():
 
 
 @app.route("/login", methods=["GET", "POST"])
-@limiter.limit("5 per minute")
-@csrf.exempt
+# @limiter.limit("5 per minute")
+# @csrf.exempt
 def login():
     """User login page."""
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
-
-        # Retrieve username and password hash from environment variables
         expected_username = config("USERNAME")
         expected_password_hash = config("PASSWORD")
 
@@ -113,22 +106,10 @@ def login():
             user = User(id=1)
             login_user(user)
             flash("Login successful!")
-
-            # Record login time or other session info if needed
-            # Example: user.login_time = datetime.now()
             return redirect(request.args.get("next") or url_for("home"))
         else:
             flash("Invalid username or password.")
             return redirect(url_for("login"))
-
-    # HTML form for login page
-    # html_str = '''
-    # <form actions="" method="post">
-    #     <p><input type=text name='username'>
-    #     <p><input type=text name='password'>
-    #     <p><input type=submit value=Login>
-    # </form>
-    # '''
     return render_template("login.html")
 
 
@@ -137,13 +118,14 @@ def login():
 def logout():
     """Logout the user and redirect to the login page."""
     logout_user()
-    return redirect(url_for("login"))
+    flash('logged out')
+    return redirect('/login')
 
 
-# Handle login failure
 @app.errorhandler(401)
 def page_not_found(error):
-    return Response("<p>Login failed</p>")
+    flash('Login problem', 'error')
+    return redirect('/login')
 
 
 @login_manager.user_loader
