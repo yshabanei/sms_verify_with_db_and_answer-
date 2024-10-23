@@ -5,7 +5,17 @@ import sqlite3
 import pandas as pd
 import requests
 from decouple import config
-from flask import Flask, jsonify, request, Response, redirect, url_for, flash, session, render_template
+from flask import (
+    Flask,
+    jsonify,
+    request,
+    Response,
+    redirect,
+    url_for,
+    flash,
+    session,
+    render_template,
+)
 from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
 from werkzeug.utils import secure_filename
 from flask_limiter import Limiter
@@ -29,10 +39,13 @@ app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config.update(SECRET_KEY=SECRET_KEY)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
+
 
 # User class for Flask-Login
 class User(UserMixin):
@@ -42,9 +55,11 @@ class User(UserMixin):
     def __repr__(self):
         return "%d" % self.id
 
+
 # Helper function to check allowed file types
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
 
 @app.route("/", methods=["GET", "POST"])
 @login_required
@@ -67,14 +82,17 @@ def home():
             file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
             file.save(file_path)
             rows, failures = import_database_from_excel(file_path)
-            session["message"] = f"Imported {rows} rows of serials and {failures} rows of failure"
+            session["message"] = (
+                f"Imported {rows} rows of serials and {failures} rows of failure"
+            )
             os.remove(file_path)
             return redirect("/")
 
     message = session.get("message", "")
     session["message"] = ""
 
-    return render_template('index.html', message=message)
+    return render_template("index.html", message=message)
+
 
 @app.route("/login", methods=["GET", "POST"])
 @limiter.limit("5 per minute")
@@ -88,7 +106,9 @@ def login():
         # Retrieve username and password hash from environment variables
         expected_username = config("USERNAME")
         expected_password_hash = config("PASSWORD")
-        if username == expected_username and check_password_hash(expected_password_hash, password):
+        if username == expected_username and check_password_hash(
+            expected_password_hash, password
+        ):
             user = User(id=1)
             login_user(user)
             flash("Login successful!")
@@ -97,7 +117,8 @@ def login():
             flash("Invalid username or password.")
             return redirect(url_for("login"))
 
-    return render_template('login.html')
+    return render_template("login.html")
+
 
 @app.route("/logout")
 @login_required
@@ -106,19 +127,23 @@ def logout():
     logout_user()
     return redirect(url_for("login"))
 
+
 # Handle login failure
 @app.errorhandler(401)
 def page_not_found(error):
     return Response("<p>Login failed</p>")
 
+
 @login_manager.user_loader
 def load_user(userid):
     return User(userid)
+
 
 @app.route("/v1/ok")
 def health_check():
     """Health check endpoint."""
     return jsonify({"message": "ok"}), 200
+
 
 @app.route(f"/v1/{CALL_BACK_TOKEN}/process", methods=["POST"])
 def process():
@@ -136,6 +161,7 @@ def process():
 
     return jsonify({"message": "processed"}), 200
 
+
 def send_sms(receptor, message):
     """Send an SMS using Kavenegar API."""
     url = config("URL")
@@ -144,11 +170,14 @@ def send_sms(receptor, message):
     try:
         res = requests.post(url, data=data)
         res.raise_for_status()
-        logging.info(f"Message '{message}' sent to {receptor}. Status code: {res.status_code}")
+        logging.info(
+            f"Message '{message}' sent to {receptor}. Status code: {res.status_code}"
+        )
     except requests.RequestException as e:
         logging.error(f"Failed to send message: {e}")
         return False
     return True
+
 
 def normalize_string(input_str, fixed_size=30):
     """Normalize the input string by replacing Persian and Arabic numbers and removing non-alphanumeric characters."""
@@ -157,7 +186,9 @@ def normalize_string(input_str, fixed_size=30):
     english_numerals = "1234567890"
 
     # Replace Persian and Arabic numerals with English numerals
-    for persian_num, arabic_num, eng_num in zip(persian_numerals, arabic_numerals, english_numerals):
+    for persian_num, arabic_num, eng_num in zip(
+        persian_numerals, arabic_numerals, english_numerals
+    ):
         input_str = input_str.replace(persian_num, eng_num)
         input_str = input_str.replace(arabic_num, eng_num)
 
@@ -172,6 +203,7 @@ def normalize_string(input_str, fixed_size=30):
     normalized_str = all_alpha + "0" * missing_zeros + all_digit
 
     return normalized_str
+
 
 def insert_serials(cur, serials):
     """Insert serial records into the database using bulk insert."""
@@ -193,6 +225,7 @@ def insert_serials(cur, serials):
         logging.info(f"Inserted {len(rows)} serial records successfully.")
     except Exception as e:
         logging.error(f"Failed to insert serial records: {e}")
+
 
 def import_database_from_excel(filepath):
     """Import data from an Excel file into the SQLite database."""
@@ -224,7 +257,9 @@ def import_database_from_excel(filepath):
                 "Date",
             ]
             if not all(col in df.columns for col in required_columns):
-                logging.error(f"Missing required columns in the Excel sheet: {required_columns}")
+                logging.error(
+                    f"Missing required columns in the Excel sheet: {required_columns}"
+                )
                 return
 
             insert_serials(cur, df)
@@ -246,6 +281,7 @@ def import_database_from_excel(filepath):
     except Exception as e:
         logging.error(f"Error importing database from Excel: {e}")
 
+
 def check_serial(serial_number):
     """Check if the serial number exists in the database and return a response."""
     with sqlite3.connect(DATABASE_FILE_PATH) as conn:
@@ -260,6 +296,7 @@ def check_serial(serial_number):
         return f"Serial number {serial_number} is valid: {result[0]}"
     else:
         return f"Serial number {serial_number} is invalid."
+
 
 if __name__ == "__main__":
     app.run(debug=True)
