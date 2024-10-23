@@ -19,6 +19,7 @@ ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS").split(",")
 API_KEY = config("API_KEY")
 DATABASE_FILE_PATH = config("DATABASE_FILE_PATH")
 SECRET_KEY = config("SECRET_KEY")
+CALL_BACK_TOKEN = config("CALL_BACK_TOKEN")
 
 app = Flask(__name__)
 limiter = Limiter(get_remote_address, app=app)
@@ -105,7 +106,9 @@ def login():
         # Retrieve username and password hash from environment variables
         expected_username = config("USERNAME")
         expected_password_hash = config("PASSWORD")
-        if username == expected_username and check_password_hash(expected_password_hash, password):
+        if username == expected_username and check_password_hash(
+            expected_password_hash, password
+        ):
             user = User(id=1)
             login_user(user)
             flash("Login successful!")
@@ -113,7 +116,7 @@ def login():
         else:
             flash("Invalid username or password.")
             return redirect(url_for("login"))
-    
+
     return Response(
         """
         <form action="" method="post">
@@ -121,7 +124,8 @@ def login():
             <p><input type="password" name="password" required placeholder="Password"></p>
             <p><input type="submit" value="Login"></p>
         </form>
-        """, content_type="text/html"
+        """,
+        content_type="text/html",
     )
 
 
@@ -150,7 +154,7 @@ def health_check():
     return jsonify(retr), 200
 
 
-@app.route("/v1/process", methods=["POST"])
+@app.route(f"/v1/{CALL_BACK_TOKEN}/process", methods=["POST"])
 def process():
     """Callback from KaveNegar. It gets sender and message, checks if valid, and replies."""
     data = request.form
