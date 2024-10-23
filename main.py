@@ -106,17 +106,29 @@ def login():
         # Retrieve username and password hash from environment variables
         expected_username = config("USERNAME")
         expected_password_hash = config("PASSWORD")
+
         if username == expected_username and check_password_hash(
             expected_password_hash, password
         ):
             user = User(id=1)
             login_user(user)
             flash("Login successful!")
+
+            # Record login time or other session info if needed
+            # Example: user.login_time = datetime.now()
             return redirect(request.args.get("next") or url_for("home"))
         else:
             flash("Invalid username or password.")
             return redirect(url_for("login"))
 
+    # HTML form for login page
+    # html_str = '''
+    # <form actions="" method="post">
+    #     <p><input type=text name='username'>
+    #     <p><input type=text name='password'>
+    #     <p><input type=submit value=Login>
+    # </form>
+    # '''
     return render_template("login.html")
 
 
