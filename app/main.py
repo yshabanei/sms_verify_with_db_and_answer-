@@ -8,6 +8,10 @@ from decouple import config
 from flask import Flask, jsonify, request, Response, redirect, url_for, flash, session
 from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
 from werkzeug.utils import secure_filename
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect
+from werkzeug.security import check_password_hash
 
 # Configure application
 UPLOAD_FOLDER = config("UPLOAD_FOLDER")
@@ -17,6 +21,9 @@ DATABASE_FILE_PATH = config("DATABASE_FILE_PATH")
 SECRET_KEY = config("SECRET_KEY")
 
 app = Flask(__name__)
+limiter = Limiter(get_remote_address, app=app)
+csrf = CSRFProtect(app)
+
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config.update(SECRET_KEY=SECRET_KEY)
 
@@ -88,36 +95,34 @@ def home():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute")
+@csrf.exempt
 def login():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
 
-        # Retrieve username and password from environment variables
+        # Retrieve username and password hash from environment variables
         expected_username = config("USERNAME")
-        expected_password = config("PASSWORD")
-
-        # Check if the provided credentials match
-        if username == expected_username and password == expected_password:
-            user = User(id=1)  # Adjust user ID as necessary
+        expected_password_hash = config("PASSWORD")
+        if username == expected_username and check_password_hash(expected_password_hash, password):
+            user = User(id=1)
             login_user(user)
             flash("Login successful!")
-            return redirect(
-                request.args.get("next") or url_for("home")
-            )  # Safe redirect
+            return redirect(request.args.get("next") or url_for("home"))
         else:
             flash("Invalid username or password.")
             return redirect(url_for("login"))
-    else:
-        return Response(
-            """
+    
+    return Response(
+        """
         <form action="" method="post">
             <p><input type="text" name="username" required placeholder="Username"></p>
             <p><input type="password" name="password" required placeholder="Password"></p>
             <p><input type="submit" value="Login"></p>
         </form>
-        """
-        )
+        """, content_type="text/html"
+    )
 
 
 @app.route("/logout")
@@ -164,7 +169,7 @@ def process():
 
 def send_sms(receptor, message):
     """Send an SMS using Kavenegar API."""
-    url = f"https://api.kavenegar.com/v1/{API_KEY}/sms/send.json"
+    url = config("URL")
     data = {"message": message, "receptor": receptor}
 
     try:
