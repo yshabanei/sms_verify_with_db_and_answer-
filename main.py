@@ -90,8 +90,8 @@ def home():
 
 
 @app.route("/login", methods=["GET", "POST"])
-# @limiter.limit("5 per minute")
-# @csrf.exempt
+@limiter.limit("5 per minute")
+@csrf.exempt
 def login():
     """User login page."""
     if request.method == "POST":
