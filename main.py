@@ -1,10 +1,10 @@
 import logging
 import os
 import re
-import sqlite3
 import pandas as pd
 import requests
 from decouple import config
+import MySQLdb
 from flask import (
     Flask,
     jsonify,
@@ -35,6 +35,12 @@ csrf = CSRFProtect()
 csrf.init_app(app)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config.update(SECRET_KEY=SECRET_KEY)
+db = MySQLdb.connect(
+    host=config("MySQL_HOST"),
+    user=config("MYSQL_USERNAME"),
+    passwd=config("MYSQL_PASSWORD"),
+    db=config("MYSQL_DB_NAME"),
+)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -118,14 +124,14 @@ def login():
 def logout():
     """Logout the user and redirect to the login page."""
     logout_user()
-    flash('logged out')
-    return redirect('/login')
+    flash("logged out")
+    return redirect("/login")
 
 
 @app.errorhandler(401)
 def page_not_found(error):
-    flash('Login problem', 'error')
-    return redirect('/login')
+    flash("Login problem", "error")
+    return redirect("/login")
 
 
 @login_manager.user_loader

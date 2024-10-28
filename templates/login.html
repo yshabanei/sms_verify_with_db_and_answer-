@@ -30,7 +30,6 @@
                                             {% endif %}
                                         {% endwith %}
                                         <form action="/login" method="POST">
-                                            {{ csrf_token() }}
                                             <div class="form-floating mb-3">
                                                 <input class="form-control" id="inputUsername" name="username" type="text" placeholder="نام کاربری" style="background-color: #f0f8ff; border: 2px solid #4CAF50; padding: 10px; border-radius: 5px; font-size: 16px;" />
                                                 <label for="inputUsername">نام کاربری</label>
