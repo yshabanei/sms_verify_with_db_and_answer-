@@ -1,6 +1,8 @@
 import logging
 import os
 import re
+import time
+
 import pandas as pd
 import requests
 from decouple import config
@@ -172,14 +174,20 @@ def process():
     data = request.form
     sender = data.get("from")
     message = normalize_string(data.get("message", ""))
-
     if not sender or not message:
         return jsonify({"error": "Missing 'from' or 'message' in request."}), 400
-
     answer = check_serial(message)
+    db = get_db_connection()
+    cur = db.cursor()
+    date = time.strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute(
+        "INSERT INTO PROCESSED_SMS(sender, message, answer, date) VALUES (%s, %s, %s,'%s')",
+        (sender, message, answer, date),
+    )
+    db.commit()
+    db.close()
     logging.info(f"Received '{message}' from {sender}")
     send_sms(sender, answer)
-
     return jsonify({"message": "processed"}), 200
 
 
