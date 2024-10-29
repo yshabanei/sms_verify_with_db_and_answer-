@@ -2,11 +2,16 @@ import logging
 import os
 import re
 import time
-
 import pandas as pd
 import requests
 from decouple import config
 import MySQLdb
+from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
+from werkzeug.utils import secure_filename
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect
+from werkzeug.security import check_password_hash
 from flask import (
     Flask,
     jsonify,
@@ -17,12 +22,6 @@ from flask import (
     session,
     render_template,
 )
-from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
-from werkzeug.utils import secure_filename
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from flask_wtf.csrf import CSRFProtect
-from werkzeug.security import check_password_hash
 
 UPLOAD_FOLDER = config("UPLOAD_FOLDER")
 ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS").split(",")
@@ -105,8 +104,27 @@ def home():
 
     message = session.get("message", "")
     session["message"] = ""
-
-    return render_template("index.html", message=message)
+    db = get_db_connection()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM PROCESSED_SMS ORDER BY date DESC LIMIT 5000")
+    all_smss = cur.fetchall()
+    smss = []
+    count = 0
+    for sms in all_smss:
+        count += 1
+        for _ in range(1000):
+            count += 1
+            sender, message, answer, date = sms
+            smss.append(
+                {
+                    "sender": sender + "_" + str(count),
+                    "message": message,
+                    "answer": answer,
+                    "date": date,
+                }
+            )
+    close_db_connection(db)
+    return render_template("index.html", message=message, data={"smss": smss})
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -185,7 +203,7 @@ def process():
         (sender, message, answer, date),
     )
     db.commit()
-    db.close()
+    close_db_connection(db)
     logging.info(f"Received '{message}' from {sender}")
     send_sms(sender, answer)
     return jsonify({"message": "processed"}), 200
@@ -265,81 +283,24 @@ def import_database_from_excel(filepath):
         cur.execute(
             """CREATE TABLE IF NOT EXISTS serials (
                     id INT PRIMARY KEY AUTO_INCREMENT,
-                    ref_number VARCHAR(100),
-                    description VARCHAR(256),
-                    start_serial CHAR(30),
-                    end_serial CHAR(30),
-                    date DATETIME
-                );"""
+                    ref_number VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    start_serial VARCHAR(255),
+                    end_serial VARCHAR(255),
+                    date DATE
+                )"""
         )
-        connection.commit()
-        df = pd.read_excel(filepath, sheet_name=0, engine="openpyxl")
-        logging.info("Importing lookup data...")
-
-        required_columns = [
-            "Reference Number",
-            "Description",
-            "Start Serial",
-            "End Serial",
-            "Date",
-        ]
-        if not all(col in df.columns for col in required_columns):
-            logging.error(
-                f"Missing required columns in the Excel sheet: {required_columns}"
-            )
-            return 0, 0
-
+        df = pd.read_excel(filepath)
         insert_serials(cur, df)
         connection.commit()
-
-        df_failed = pd.read_excel(filepath, sheet_name=1, engine="openpyxl")
-        logging.info("Importing failed serial numbers...")
-
-        failures = 0
-        for index, row in df_failed.iterrows():
-            failed_serial = normalize_string(row.get("Failed Serial", ""))
-            logging.info(f"Failed serial {index}: {failed_serial}")
-            failures += 1
-
-        logging.info("Finished importing lookup data.")
-        return len(df), failures
-    except FileNotFoundError:
-        logging.error("Excel file not found.")
-        return 0, 0
-    except MySQLdb.Error as e:
-        logging.error(f"MySQL error: {e}")
-        return 0, 0
+        logging.info(f"Excel imported: {len(df)} rows.")
+        return len(df), 0
     except Exception as e:
-        logging.error(f"Error importing database from Excel: {e}")
-        return 0, 0
-    finally:
-        close_db_connection(connection)
-
-
-def check_serial(serial_number):
-    """بررسی وجود شماره سریال در دیتابیس"""
-    connection = get_db_connection()
-    if not connection:
-        return "Database connection issue. Please try again."
-
-    try:
-        with connection.cursor() as cur:
-            cur.execute(
-                "SELECT description FROM serials WHERE start_serial <= %s AND end_serial >= %s",
-                (serial_number, serial_number),
-            )
-            result = cur.fetchone()
-        return (
-            f"Serial number {serial_number} is valid: {result[0]}"
-            if result
-            else f"Serial number {serial_number} is invalid."
-        )
-    except MySQLdb.Error as e:
-        logging.error(f"Database query failed: {e}")
-        return "Database error. Please try again."
+        logging.error(f"Failed to import data from excel: {e}")
+        return 0, 1
     finally:
         close_db_connection(connection)
 
 
 if __name__ == "__main__":
-    app.run()
+    app.run(debug=True)
