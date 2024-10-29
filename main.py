@@ -181,7 +181,7 @@ def process():
     cur = db.cursor()
     date = time.strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
-        "INSERT INTO PROCESSED_SMS(sender, message, answer, date) VALUES (%s, %s, %s,'%s')",
+        "INSERT INTO PROCESSED_SMS(sender, message, answer, date) VALUES (%s, %s, %s, %s)",
         (sender, message, answer, date),
     )
     db.commit()
@@ -210,9 +210,9 @@ def send_sms(receptor, message):
 
 def normalize_string(input_str, fixed_size=30):
     """استانداردسازی رشته ورودی برای حذف کاراکترهای غیرالفبایی"""
-    persian_numerals = "۱۲۳۴۵۶۷۸۹۰"
-    arabic_numerals = "١٢٣٤٥٦٧٨٩٠"
-    english_numerals = "1234567890"
+    persian_numerals = config("PERSIAN_NUMERALS")
+    arabic_numerals = config("ARABIC_NUMERALS")
+    english_numerals = config("ENGLISH_NUMERALS")
 
     for persian_num, arabic_num, eng_num in zip(
         persian_numerals, arabic_numerals, english_numerals
