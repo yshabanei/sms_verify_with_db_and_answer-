@@ -130,6 +130,7 @@
                                 <table id="datatablesSimple">
                                     <thead>
                                         <tr>
+                                            <th>Status</th>
                                             <th>Sender</th>
                                             <th>MESSAGE</th>
                                             <th>ANSWER</th>
@@ -138,6 +139,7 @@
                                     </thead>
                                     <tfoot>
                                         <tr>
+                                            <th>Status</th>
                                             <th>Sender</th>
                                             <th>MESSAGE</th>
                                             <th>ANSWER</th>
@@ -147,9 +149,10 @@
                                     <tbody>
                                         {% for sms in data.smss %}
                                         <tr>
+                                            <td>{{sms.status}}</td>
                                             <td>{{sms.sender}}</td>
                                             <td>{{sms.message}}</td>
-                                            <td><{{sms.answer}}/td>
+                                            <td>{{sms.answer}}</td>
                                             <td>{{sms.date}}</td>
                                         </tr>
                                         {% endfor %}
