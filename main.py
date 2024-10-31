@@ -2,16 +2,11 @@ import logging
 import os
 import re
 import time
+import subprocess
+import MySQLdb
 import pandas as pd
 import requests
 from decouple import config
-import MySQLdb
-from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
-from werkzeug.utils import secure_filename
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from flask_wtf.csrf import CSRFProtect
-from werkzeug.security import check_password_hash
 from flask import (
     Flask,
     jsonify,
@@ -19,9 +14,19 @@ from flask import (
     redirect,
     url_for,
     flash,
-    session,
     render_template,
 )
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_login import (
+    LoginManager,
+    UserMixin,
+    login_required,
+    login_user,
+    logout_user,
+    current_user,
+)
+from werkzeug.utils import secure_filename
 
 UPLOAD_FOLDER = config("UPLOAD_FOLDER")
 ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS").split(",")
@@ -31,8 +36,6 @@ CALL_BACK_TOKEN = config("CALL_BACK_TOKEN")
 
 app = Flask(__name__)
 limiter = Limiter(get_remote_address, app=app)
-csrf = CSRFProtect()
-csrf.init_app(app)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config.update(SECRET_KEY=SECRET_KEY)
 
@@ -73,6 +76,9 @@ class User(UserMixin):
         return "%d" % self.id
 
 
+user = User(0)
+
+
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -80,89 +86,101 @@ def allowed_file(filename):
 @app.route("/", methods=["GET", "POST"])
 @login_required
 def home():
-    """صفحه اصلی برای آپلود فایل"""
+    """creates database if method is post otherwise shows the homepage with some stats
+    see import_database_from_excel() for more details on database creation"""
     if request.method == "POST":
+        # check if the post request has the file part
         if "file" not in request.files:
-            flash("No file part")
+            flash("No file part", "danger")
             return redirect(request.url)
-
         file = request.files["file"]
-
+        # if user does not select file, browser also
+        # submit an empty part without filename
         if file.filename == "":
-            flash("No selected file")
-            session["message"] = "No selected file"
+            flash("No selected file", "danger")
             return redirect(request.url)
-
         if file and allowed_file(file.filename):
+            # TODO: is space find in a file name? check if it works
             filename = secure_filename(file.filename)
+            filename.replace(
+                " ", "_"
+            )  # no space in filenames! because we will call them as command line arguments
             file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
             file.save(file_path)
-            rows, failures = import_database_from_excel(file_path)
-            session["message"] = f"Imported {rows} rows and {failures} failures"
-            os.remove(file_path)
+            subprocess.Popen(["python", "import_db.py", file_path])
+            flash(
+                "File uploaded. Will be imported soon. follow from DB Status Page",
+                "info",
+            )
             return redirect("/")
 
-    message = session.get("message", "")
-    session["message"] = ""
     db = get_db_connection()
     cur = db.cursor()
-    # get last 5000 smss
+    # get last 5000 sms
     cur.execute("SELECT * FROM PROCESSED_SMS ORDER BY date DESC LIMIT 5000")
-
     all_smss = cur.fetchall()
     smss = []
-    count = 0
     for sms in all_smss:
         status, sender, message, answer, date = sms
         smss.append(
             {
                 "status": status,
-                "sender": sender + "_" + str(count),
+                "sender": sender,
                 "message": message,
                 "answer": answer,
                 "date": date,
             }
         )
+
     # collect some stats for the GUI
-    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'OK'")
-    num_ok = cur.fetchone()[0]
+    try:
+        cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'OK'")
+        num_ok = cur.fetchone()[0]
+    except:
+        num_ok = "error"
 
-    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'FAILURE'")
-    num_failure = cur.fetchone()[0]
+    try:
+        cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'FAILURE'")
+        num_failure = cur.fetchone()[0]
+    except:
+        num_failure = "error"
 
-    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'DOUBLE'")
-    num_double = cur.fetchone()[0]
+    try:
+        cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'DOUBLE'")
+        num_double = cur.fetchone()[0]
+    except:
+        num_double = "error"
 
-    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'NOT-FOUND'")
-    num_not_found = cur.fetchone()[0]
+    try:
+        cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'NOT-FOUND'")
+        num_notfound = cur.fetchone()[0]
+    except:
+        num_notfound = "error"
+
     return render_template(
         "index.html",
-        message=message,
         data={
             "smss": smss,
             "ok": num_ok,
             "failure": num_failure,
             "double": num_double,
-            "num_not_found": num_not_found,
+            "notfound": num_notfound,
         },
     )
 
 
 @app.route("/login", methods=["GET", "POST"])
-@limiter.limit("5 per minute")
-@csrf.exempt
+@limiter.limit("10 per minute")
 def login():
     """صفحه ورود کاربر"""
+    if current_user.is_authenticated:
+        return redirect("/")
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
         expected_username = config("USERNAME")
         expected_password_hash = config("PASSWORD")
-
-        if username == expected_username and check_password_hash(
-            expected_password_hash, password
-        ):
-            user = User(id=1)
+        if password == expected_password_hash and username == expected_username:
             login_user(user)
             flash("Login successful!")
             return redirect(request.args.get("next") or url_for("home"))
