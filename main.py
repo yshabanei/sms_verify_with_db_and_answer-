@@ -106,7 +106,9 @@ def home():
     session["message"] = ""
     db = get_db_connection()
     cur = db.cursor()
-    cur.execute("SELECT * FROM PROCESSED_SMS ORDER BY date DESC LIMIT 10")
+    # get last 5000 smss
+    cur.execute("SELECT * FROM PROCESSED_SMS ORDER BY date DESC LIMIT 5000")
+
     all_smss = cur.fetchall()
     smss = []
     count = 0
@@ -121,7 +123,29 @@ def home():
                 "date": date,
             }
         )
-    return render_template("index.html", message=message, data={"smss": smss})
+    # collect some stats for the GUI
+    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'OK'")
+    num_ok = cur.fetchone()[0]
+
+    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'FAILURE'")
+    num_failure = cur.fetchone()[0]
+
+    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'DOUBLE'")
+    num_double = cur.fetchone()[0]
+
+    cur.execute("SELECT count(*) FROM PROCESSED_SMS WHERE status = 'NOT-FOUND'")
+    num_not_found = cur.fetchone()[0]
+    return render_template(
+        "index.html",
+        message=message,
+        data={
+            "smss": smss,
+            "ok": num_ok,
+            "failure": num_failure,
+            "double": num_double,
+            "num_not_found": num_not_found,
+        },
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])
