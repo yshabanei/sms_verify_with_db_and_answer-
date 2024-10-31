@@ -1,86 +1,131 @@
-import logging
 import os
 import re
-import time
 import subprocess
+import time
+from textwrap import dedent
+
 import MySQLdb
-import pandas as pd
 import requests
 from decouple import config
 from flask import (
     Flask,
-    jsonify,
-    request,
-    redirect,
-    url_for,
+    abort,
     flash,
+    jsonify,
+    redirect,
     render_template,
+    request,
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_login import (
     LoginManager,
     UserMixin,
+    current_user,
     login_required,
     login_user,
     logout_user,
-    current_user,
 )
 from werkzeug.utils import secure_filename
 
+app = Flask(__name__)
+
+MAX_FLASH = 10
 UPLOAD_FOLDER = config("UPLOAD_FOLDER")
 ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS").split(",")
 API_KEY = config("API_KEY")
 SECRET_KEY = config("SECRET_KEY")
 CALL_BACK_TOKEN = config("CALL_BACK_TOKEN")
 
-app = Flask(__name__)
-limiter = Limiter(get_remote_address, app=app)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config.update(SECRET_KEY=SECRET_KEY)
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri="redis://localhost:6379",  # Configure with your Redis connection
 )
 
+# flask-login
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
+login_manager.login_message_category = "danger"
 
 
-# ایجاد تابع برای اتصال به دیتابیس
-def get_db_connection():
-    try:
-        connection = MySQLdb.connect(
-            host=config("MySQL_HOST"),
-            user=config("MYSQL_USERNAME"),
-            passwd=config("MYSQL_PASSWORD"),
-            db=config("MYSQL_DB_NAME"),
-        )
-        return connection
-    except MySQLdb.Error as e:
-        logging.error(f"Database connection failed: {e}")
-        return None
+def extract_digits(serial_number):
+    all_digit = "".join(re.findall(r"\d", serial_number))
+    return all_digit
 
 
-def close_db_connection(connection):
-    if connection:
-        connection.close()
+def allowed_file(filename):
+    """checks the extension of the passed filename to be in the allowed extensions"""
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+app.config.update(SECRET_KEY=config("SECRET_KEY"))
 
 
 class User(UserMixin):
+    """A minimal and singleton user class used only for administrative tasks"""
+
     def __init__(self, id):
         self.id = id
 
     def __repr__(self):
-        return "%d" % self.id
+        return "%d" % (self.id)
 
 
 user = User(0)
 
 
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+@app.route("/db_status/", methods=["GET"])
+@login_required
+def db_status():
+    """show some status about the DB"""
+
+    db = get_database_connection()
+    cur = db.cursor()
+
+    # collect some stats for the GUI
+    try:
+        cur.execute("SELECT count(*) FROM serials")
+        num_serials = cur.fetchone()[0]
+    except:
+        num_serials = "can not query serials count"
+
+    try:
+        cur.execute("SELECT count(*) FROM invalids")
+        num_invalids = cur.fetchone()[0]
+    except:
+        num_invalids = "can not query invalid count"
+
+    try:
+        cur.execute("SELECT log_value FROM logs WHERE log_name = 'import'")
+        log_import = cur.fetchone()[0]
+    except:
+        log_import = "can not read import log results... yet"
+
+    try:
+        cur.execute("SELECT log_value FROM logs WHERE log_name = 'db_filename'")
+        log_filename = cur.fetchone()[0]
+    except:
+        log_filename = "can not read db filename from database"
+
+    try:
+        cur.execute("SELECT log_value FROM logs WHERE log_name = 'db_check'")
+        log_db_check = cur.fetchone()[0]
+    except:
+        log_db_check = "Can not read db_check logs... yet"
+
+    return render_template(
+        "db_status.html",
+        data={
+            "serials": num_serials,
+            "invalids": num_invalids,
+            "log_import": log_import,
+            "log_db_check": log_db_check,
+            "log_filename": log_filename,
+        },
+    )
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -114,8 +159,10 @@ def home():
             )
             return redirect("/")
 
-    db = get_db_connection()
+    db = get_database_connection()
+
     cur = db.cursor()
+
     # get last 5000 sms
     cur.execute("SELECT * FROM PROCESSED_SMS ORDER BY date DESC LIMIT 5000")
     all_smss = cur.fetchall()
@@ -172,48 +219,63 @@ def home():
 @app.route("/login", methods=["GET", "POST"])
 @limiter.limit("10 per minute")
 def login():
-    """صفحه ورود کاربر"""
+    """user login: only for admin user (system has no other user than admin)
+    Note: there is a 10 tries per minute limitation to admin login to avoid minimize password factoring
+    """
     if current_user.is_authenticated:
         return redirect("/")
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
-        expected_username = config("USERNAME")
-        expected_password_hash = config("PASSWORD")
-        if password == expected_password_hash and username == expected_username:
+        if password == config.PASSWORD and username == config.USERNAME:
             login_user(user)
-            flash("Login successful!")
-            return redirect(request.args.get("next") or url_for("home"))
+            return redirect("/")
         else:
-            flash("Invalid username or password.")
-            return redirect(url_for("login"))
-    return render_template("login.html")
+            return abort(401)
+    else:
+        return render_template("login.html")
+
+
+@app.route(f"/v1/{CALL_BACK_TOKEN}/check_one_serial/<serial>", methods=["GET"])
+def check_one_serial_api(serial):
+    """to check whether a serial number is valid or not using api
+    caller should use something like /v1/ABCDSECRET/check_one_serial/AA10000
+    answer back json which is status = DOUBLE, FAILURE, OK, NOT-FOUND
+    """
+    status, answer = check_serial(serial)
+    ret = {"status": status, "answer": answer}
+    return jsonify(ret), 200
 
 
 @app.route("/check_one_serial", methods=["POST"])
 @login_required
 def check_one_serial():
+    """to check whether a serial number is valid or not"""
     serial_to_check = request.form["serial"]
-    status, answer = check_serial(normalize_string(serial_to_check))
-    flash(f"{status}-{answer}", "info")
+    status, answer = check_serial(serial_to_check)
+    flash(f"{status} - {answer}", "info")
+
     return redirect("/")
 
 
 @app.route("/logout")
 @login_required
 def logout():
-    """خروج از حساب کاربری و بازگشت به صفحه ورود"""
+    """logs out the admin user"""
     logout_user()
-    flash("Logged out")
+    flash("Logged out", "success")
     return redirect("/login")
 
 
+#
 @app.errorhandler(401)
-def page_not_found(e):
-    flash("Login problem", "error")
+def unauthorized(error):
+    """handling login failures"""
+    flash("Login problem", "danger")
     return redirect("/login")
 
 
+# callback to reload the user object
 @login_manager.user_loader
 def load_user(userid):
     return User(userid)
@@ -221,182 +283,218 @@ def load_user(userid):
 
 @app.route("/v1/ok")
 def health_check():
-    """بررسی سلامت سرور"""
-    return jsonify({"message": "ok"}), 200
+    """for system health check. calling it will answer with json message: ok"""
+    ret = {"message": "ok"}
+    return jsonify(ret), 200
 
 
-@app.route(f"/v1/{CALL_BACK_TOKEN}/process", methods=["POST"])
-def process():
-    """واسط بازخورد KaveNegar برای پردازش پیام‌ها"""
-    data = request.form
-    sender = data.get("from")
-    message = normalize_string(data.get("message", ""))
-    if not sender or not message:
-        return jsonify({"error": "Missing 'from' or 'message' in request."}), 400
-    status, answer = check_serial(message)
-    db = get_db_connection()
-    cur = db.cursor()
-    date = time.strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute(
-        "INSERT INTO PROCESSED_SMS(status, sender, message, answer, date) VALUES (%s, %s, %s, %s, %s)",
-        (status, sender, message, answer, date),
-    )
-    db.commit()
-    db.close()
-    logging.info(f"Received '{message}' from {sender}")
-    send_sms(sender, answer)
-    return jsonify({"message": "processed"}), 200
+def get_database_connection():
+    try:
+        # Use default 'localhost' if MySQL_HOST is not defined in .env
+        db = MySQLdb.connect(
+            host=config("MySQL_HOST", default="localhost"),
+            user=config("MySQL_USER", default="root"),
+            passwd=config("MySQL_PASSWORD", default="password"),
+            db=config("MySQL_DB", default="your_database"),
+        )
+        return db
+    except MySQLdb.Error as e:
+        print(f"Error connecting to database: {e}")
+        return None
 
 
 def send_sms(receptor, message):
-    """ارسال پیامک با API Kavenegar"""
+    """gets a MSISDN and a message, then uses KaveNegar to send sms."""
     url = config("URL")
     data = {"message": message, "receptor": receptor}
-
-    try:
-        res = requests.post(url, data=data)
-        res.raise_for_status()
-        logging.info(
-            f"Message '{message}' sent to {receptor}. Status code: {res.status_code}"
-        )
-    except requests.RequestException as e:
-        logging.error(f"Failed to send message: {e}")
-        return False
-    return True
+    res = requests.post(url, data)
 
 
-def normalize_string(input_str, fixed_size=30):
-    """استانداردسازی رشته ورودی برای حذف کاراکترهای غیرالفبایی"""
+def _remove_non_alphanum_char(string):
+    return re.sub(r"\W+", "", string)
+
+
+def _translate_numbers(current, new, string):
+    translation_table = str.maketrans(current, new)
+    return string.translate(translation_table)
+
+
+def normalize_string(serial_number, fixed_size=30):
+    """gets a serial number and standardize it as following:
+    >> converts(removes others) all chars to English upper letters and numbers
+    >> adds zeros between letters and numbers to make it fixed length"""
+
+    serial_number = _remove_non_alphanum_char(serial_number)
+    serial_number = serial_number.upper()
+
     persian_numerals = config("PERSIAN_NUMERALS")
     arabic_numerals = config("ARABIC_NUMERALS")
     english_numerals = config("ENGLISH_NUMERALS")
 
-    for persian_num, arabic_num, eng_num in zip(
-        persian_numerals, arabic_numerals, english_numerals
-    ):
-        input_str = input_str.replace(persian_num, eng_num)
-        input_str = input_str.replace(arabic_num, eng_num)
+    serial_number = _translate_numbers(
+        persian_numerals, english_numerals, serial_number
+    )
+    serial_number = _translate_numbers(arabic_numerals, english_numerals, serial_number)
 
-    input_str = re.sub(r"\W+", "", input_str.upper())
+    all_digit = "".join(re.findall("\d", serial_number))
+    all_alpha = "".join(re.findall("[A-Z]", serial_number))
 
-    all_alpha = "".join([c for c in input_str if c.isalpha()])
-    all_digit = "".join([c for c in input_str if c.isdigit()])
+    missing_zeros = "0" * (fixed_size - len(all_alpha + all_digit))
 
-    missing_zeros = fixed_size - len(all_alpha) - len(all_digit)
-    normalized_str = all_alpha + "0" * missing_zeros + all_digit
-
-    return normalized_str
+    return f"{all_alpha}{missing_zeros}{all_digit}"
 
 
-def insert_serials(cur, serials):
-    """ورود رکوردهای سریال به دیتابیس به‌صورت دسته‌ای"""
-    try:
-        rows = [
-            (
-                row["Reference Number"],
-                row["Description"],
-                normalize_string(row["Start Serial"]),
-                normalize_string(row["End Serial"]),
-                row["Date"],
-            )
-            for _, row in serials.iterrows()
-        ]
-        cur.executemany(
-            "INSERT INTO serials (ref_number, description, start_serial, end_serial, date) VALUES (%s, %s, %s, %s, %s)",
-            rows,
+def check_serial(serial):
+    """gets one serial number and returns appropriate
+    answer to that, after looking it up in the db
+    """
+    original_serial = serial
+    serial = normalize_string(serial)
+
+    db = get_database_connection()
+
+    with db.cursor() as cur:
+        results = cur.execute(
+            "SELECT * FROM invalids WHERE invalid_serial = %s", (serial,)
         )
-        logging.info(f"Inserted {len(rows)} serial records successfully.")
-    except Exception as e:
-        logging.error(f"Failed to insert serial records: {e}")
+        if results > 0:
+            answer = dedent(
+                f"""\
+                {original_serial}
+                این شماره هولوگرام یافت نشد. لطفا دوباره سعی کنید  و یا با واحد پشتیبانی تماس حاصل فرمایید.
+                ساختار صحیح شماره هولوگرام بصورت دو حرف انگلیسی و 7 یا 8 رقم در دنباله آن می باشد. مثال:
+                FA1234567
+                شماره تماس با بخش پشتیبانی فروش شرکت التک:
+                021-22038385"""
+            )
+
+            return "FAILURE", answer
+
+        results = cur.execute(
+            "SELECT * FROM serials WHERE start_serial <= %s and end_serial >= %s",
+            (serial, serial),
+        )
+        if results > 1:
+            answer = dedent(
+                f"""\
+                {original_serial}
+                این شماره هولوگرام مورد تایید است.
+                برای اطلاعات بیشتر از نوع محصول با بخش پشتیبانی فروش شرکت التک تماس حاصل فرمایید:
+                021-22038385"""
+            )
+            return "DOUBLE", answer
+        elif results == 1:
+            ret = cur.fetchone()
+            desc = ret[2]
+            ref_number = ret[1]
+            date = ret[5].date()
+            rettext = ret[6] + "\n" + ret[7]
+            answer = dedent(
+                f"""{original_serial}
+{ref_number}
+{desc}
+Hologram date: {date}
+{rettext}"""
+            )
+            return "OK", answer
+
+    answer = dedent(
+        f"""\
+        {original_serial}
+        این شماره هولوگرام یافت نشد. لطفا دوباره سعی کنید  و یا با واحد پشتیبانی تماس حاصل فرمایید.
+        ساختار صحیح شماره هولوگرام بصورت دو حرف انگلیسی و 7 یا 8 رقم در دنباله آن می باشد. مثال:
+        FA1234567
+        شماره تماس با بخش پشتیبانی فروش شرکت التک:
+        021-22038385"""
+    )
+
+    return "NOT-FOUND", answer
 
 
-def import_database_from_excel(filepath):
-    """وارد کردن داده‌ها از فایل اکسل به دیتابیس"""
-    connection = get_db_connection()
-    if not connection:
-        return 0, 0
+@app.route(f"/v1/{CALL_BACK_TOKEN}/process", methods=["POST"])
+def process():
+    """this is a call back from KaveNegar. Will get sender and message and
+    will check if it is valid, then answers back.
+    This is secured by 'CALL_BACK_TOKEN' in order to avoid mal-intended calls
+    """
+    data = request.form
+    sender = data["from"]
+    message = data["message"]
+
+    status, answer = check_serial(message)
+
+    db = get_database_connection()
+
+    cur = db.cursor()
+
+    log_new_sms(status, sender, message, answer, cur)
+
+    db.commit()
+    db.close()
+
+    send_sms(sender, answer)
+    ret = {"message": "processed"}
+    return jsonify(ret), 200
+
+
+def log_new_sms(status, sender, message, answer, cur):
+    if len(message) > 40:
+        return
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute(
+        "INSERT INTO PROCESSED_SMS (status, sender, message, answer, date) VALUES (%s, %s, %s, %s, %s)",
+        (status, sender, message, answer, now),
+    )
+
+
+@app.errorhandler(404)
+def page_not_found(error):
+    """returns 404 page"""
+    return render_template("404.html"), 404
+
+
+def create_sms_table():
+    """Creates PROCESSED_SMS table on database if it's not exists."""
+
+    db = get_database_connection()
+
+    cur = db.cursor()
 
     try:
-        cur = connection.cursor()
-        cur.execute("DROP TABLE IF EXISTS serials")
         cur.execute(
-            """CREATE TABLE IF NOT EXISTS serials (
-                    id INT PRIMARY KEY AUTO_INCREMENT,
-                    ref_number VARCHAR(100),
-                    description VARCHAR(256),
-                    start_serial CHAR(30),
-                    end_serial CHAR(30),
-                    date DATETIME
-                );"""
+            """CREATE TABLE IF NOT EXISTS PROCESSED_SMS (
+            status ENUM('OK', 'FAILURE', 'DOUBLE', 'NOT-FOUND'),
+            sender CHAR(20),
+            message VARCHAR(400),
+            answer VARCHAR(400),
+            date DATETIME, INDEX(date, status));"""
         )
-        connection.commit()
-        df = pd.read_excel(filepath, sheet_name=0, engine="openpyxl")
-        logging.info("Importing lookup data...")
-
-        required_columns = [
-            "Reference Number",
-            "Description",
-            "Start Serial",
-            "End Serial",
-            "Date",
-        ]
-        if not all(col in df.columns for col in required_columns):
-            logging.error(
-                f"Missing required columns in the Excel sheet: {required_columns}"
-            )
-            return 0, 0
-
-        insert_serials(cur, df)
-        connection.commit()
-
-        df_failed = pd.read_excel(filepath, sheet_name=1, engine="openpyxl")
-        logging.info("Importing failed serial numbers...")
-
-        failures = 0
-        for index, row in df_failed.iterrows():
-            failed_serial = normalize_string(row.get("Failed Serial", ""))
-            logging.info(f"Failed serial {index}: {failed_serial}")
-            failures += 1
-
-        logging.info("Finished importing lookup data.")
-        return len(df), failures
-    except FileNotFoundError:
-        logging.error("Excel file not found.")
-        return 0, 0
-    except MySQLdb.Error as e:
-        logging.error(f"MySQL error: {e}")
-        return 0, 0
+        db.commit()
     except Exception as e:
-        logging.error(f"Error importing database from Excel: {e}")
-        return 0, 0
-    finally:
-        close_db_connection(connection)
+        flash(f"Error creating PROCESSED_SMS table; {e}", "danger")
+
+    db.close()
 
 
-def check_serial(serial_number):
-    """بررسی وجود شماره سریال در دیتابیس"""
-    connection = get_db_connection()
-    if not connection:
-        return "Database connection issue. Please try again."
-
-    try:
-        with connection.cursor() as cur:
-            cur.execute(
-                "SELECT description FROM serials WHERE start_serial <= %s AND end_serial >= %s",
-                (serial_number, serial_number),
-            )
-            result = cur.fetchone()
-        return (
-            f"Serial number {serial_number} is valid: {result[0]}"
-            if result
-            else f"Serial number {serial_number} is invalid."
+def create_sms_table():
+    db = get_database_connection()
+    if db:
+        cursor = db.cursor()
+        cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS sms_table (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            serial_number VARCHAR(255)
         )
-    except MySQLdb.Error as e:
-        logging.error(f"Database query failed: {e}")
-        return "Database error. Please try again."
-    finally:
-        close_db_connection(connection)
+        """
+        )
+        db.commit()
+        cursor.close()
+        db.close()
+    else:
+        print("Database connection failed. Table creation skipped.")
 
 
 if __name__ == "__main__":
-    app.run()
+    create_sms_table()
+    app.run("0.0.0.0", 5000, debug=False)
