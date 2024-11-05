@@ -3,7 +3,6 @@ import re
 import subprocess
 import time
 from textwrap import dedent
-
 import MySQLdb
 import requests
 from decouple import config
@@ -36,6 +35,8 @@ ALLOWED_EXTENSIONS = config("ALLOWED_EXTENSIONS").split(",")
 API_KEY = config("API_KEY")
 SECRET_KEY = config("SECRET_KEY")
 CALL_BACK_TOKEN = config("CALL_BACK_TOKEN")
+PASSWORD = config("PASSWORD")
+USERNAME = config("USERNAME")
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
@@ -162,6 +163,7 @@ def home():
     db = get_database_connection()
 
     cur = db.cursor()
+    print(cur)
 
     # get last 5000 sms
     cur.execute("SELECT * FROM PROCESSED_SMS ORDER BY date DESC LIMIT 5000")
@@ -227,7 +229,7 @@ def login():
     if request.method == "POST":
         username = request.form["username"]
         password = request.form["password"]
-        if password == config.PASSWORD and username == config.USERNAME:
+        if password == PASSWORD and username == USERNAME:
             login_user(user)
             return redirect("/")
         else:
@@ -296,6 +298,7 @@ def get_database_connection():
             user=config("MySQL_USER", default="root"),
             passwd=config("MySQL_PASSWORD", default="password"),
             db=config("MySQL_DB", default="your_database"),
+            charset="utf8",
         )
         return db
     except MySQLdb.Error as e:
@@ -476,25 +479,5 @@ def create_sms_table():
     db.close()
 
 
-def create_sms_table():
-    db = get_database_connection()
-    if db:
-        cursor = db.cursor()
-        cursor.execute(
-            """
-        CREATE TABLE IF NOT EXISTS sms_table (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            serial_number VARCHAR(255)
-        )
-        """
-        )
-        db.commit()
-        cursor.close()
-        db.close()
-    else:
-        print("Database connection failed. Table creation skipped.")
-
-
 if __name__ == "__main__":
-    create_sms_table()
     app.run("0.0.0.0", 5000, debug=False)
